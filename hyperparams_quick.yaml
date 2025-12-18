@@ -1,0 +1,65 @@
+# =============================================================================
+# Quick Experiment Configuration (快速实验配置)
+# =============================================================================
+# Usage: python train.py -p hyperparams_quick.yaml -n <experiment_name>
+#
+# 可用的实验条件 (Available Conditions):
+#   - baseline: 原始 ReLU，无干预
+#   - specnorm: Spectral Normalization (谱归一化) - 防止特征秩崩溃
+#   - layernorm: 添加 LayerNorm
+# =============================================================================
+
+experiment:
+  algo: ppo
+  save_freq: 200
+  
+  conditions:
+    # Spectral Normalization (谱归一化) - 防止特征秩崩溃
+    specnorm:
+      model.specnorm: true
+  
+  name: null
+  num_sessions: 1
+
+# -----------------------------------------------------------------------------
+# 环境配置 (Environment Configuration)
+# -----------------------------------------------------------------------------
+environment:
+  name: procgen
+  task: coinrun_100
+  shift_type: permute
+  obs_type: conv64
+  env_copies: 8
+
+# -----------------------------------------------------------------------------
+# 模型配置 (Model Configuration)
+# -----------------------------------------------------------------------------
+model:
+  enc_type: null
+  h_size: 256
+  lr: 0.0005
+  l2_norm: 0.00
+  l2_init: 0.00
+  w2_init: 0.00
+  redo_weight: 0.00
+  redo_freq: 10
+  activation: relu
+  layernorm: false
+  specnorm: false
+  adapt_info: ['none', null]
+
+# -----------------------------------------------------------------------------
+# PPO 训练器配置 (PPO Trainer Configuration)
+# -----------------------------------------------------------------------------
+ppo_trainer:
+  batch_size: 64
+  buffer_size: 1024
+  num_passes: 3
+  ent_coef: 0.02
+  gamma: 0.99
+  lambda: 0.95
+  clip_param: 0.2
+  num_epochs: 3000
+  shift_points: [1000, 2000]
+  test_episodes: 30
+  test_interval: 50
