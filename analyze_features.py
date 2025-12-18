@@ -16,14 +16,15 @@
    - 随机噪声无法代表网络对真实环境的处理能力
    - 网络对噪声的响应与对结构化图像的响应完全不同
    
-2. 【样本量】大批量采样确保 N >> D
-   - N = 2500 样本, D = 256 特征维度
-   - N/D ratio ≈ 9.8，避免秩被截断
+2. 【样本量】大批量采样确保 N >= 10*D
+   - N = 2560 样本, D = 256 特征维度
+   - N/D ratio = 10，避免奇异值谱尾部被统计噪声截断
    - 训练时 batch_size=64 < h_size=256 会导致秩计算失真
    
 3. 【统计口径】累积统计死神经元（全数据集永久死亡率）
    - 只有在所有样本上都从未激活的神经元才计为"死神经元"
-   - 区分 ReLU 的正常稀疏性与真正的神经元死亡
+   - 区分 ReLU 的正常稀疏性（某些样本不激活）与真正的神经元死亡（永远不激活）
+   - 报告中注明: "Dead units are defined as neurons that never activate over 2.5k steps"
 
 Usage:
     python analyze_features.py
@@ -185,7 +186,7 @@ def extract_features(model, observations, device='cpu'):
     
     Args:
         model: PPO 模型
-        observations: (N, obs_dim) 观测数据
+        observations: (N, ...) 观测数据（支持任意形状）
         device: 计算设备
     
     Returns:
@@ -198,8 +199,8 @@ def extract_features(model, observations, device='cpu'):
     with torch.no_grad():
         for i in range(0, len(observations), batch_size):
             batch = observations[i:i+batch_size].to(device)
-            x = batch.view(-1, model.obs_size)
-            feat = model.encoder(x)
+            # Encoder 现在支持灵活输入，无需手动 reshape
+            feat = model.encoder(batch)
             features.append(feat.cpu())
     
     return torch.cat(features, dim=0)
@@ -251,16 +252,26 @@ def compute_dead_neurons_cumulative(model, observations, device='cpu'):
     """
     累积统计死神经元（全数据集永久死亡率）
     
-    只有在所有样本上都从未激活过的神经元才计为"死神经元"
+    定义：只有在所有样本上都从未激活过的神经元才计为"死神经元"
+    这区分了 ReLU 的正常稀疏性（某些样本不激活）和真正的神经元死亡（永远不激活）
+    
+    统计方法：
+    1. 创建 alive_mask（初始全 True）
+    2. 遍历所有样本，只要神经元激活过一次，就标记为 alive
+    3. 最后统计从未激活的神经元比例
     
     Args:
         model: PPO 模型
-        observations: (N, obs_dim) 观测数据
+        observations: (N, ...) 观测数据
         device: 计算设备
     
     Returns:
-        dead_ratio: 死神经元比例
+        dead_ratio: 死神经元比例（永久死亡率）
         activation_counts: 每个神经元的激活次数
+    
+    Note:
+        Dead units are defined as neurons that never activate over the entire test set.
+        This is different from per-batch sparsity which is normal for ReLU networks.
     """
     model.eval()
     h_size = model.h_size
@@ -271,15 +282,15 @@ def compute_dead_neurons_cumulative(model, observations, device='cpu'):
     with torch.no_grad():
         for i in range(0, len(observations), batch_size):
             batch = observations[i:i+batch_size].to(device)
-            x = batch.view(-1, model.obs_size)
-            feat = model.encoder(x).cpu()
+            # Encoder 现在支持灵活输入
+            feat = model.encoder(batch).cpu()
             
             # 统计每个神经元是否激活 (> 0)
             activated = (feat > 0).float()
             activation_counts += activated.sum(dim=0)
             total_samples += len(batch)
     
-    # 计算从未激活过的神经元比例
+    # 计算从未激活过的神经元比例（永久死亡）
     never_activated = (activation_counts == 0).float()
     dead_ratio = never_activated.mean().item()
     
@@ -447,11 +458,11 @@ def main():
     output_dir = Path('results/feature_analysis')
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 收集大批量真实观测数据 (N >> D=256)
+    # 收集大批量真实观测数据 (N >= 10*D=2560)
     print("\n[1/4] Collecting real observations from ProcGen...")
-    num_samples = 2500  # 确保 N >> D (256)
+    num_samples = 2560  # 确保 N >= 10*D (256)，避免奇异值谱尾部被截断
     observations = collect_large_batch_observations(num_samples=num_samples)
-    print(f"Collected {len(observations)} observations")
+    print(f"Collected {len(observations)} observations (N/D ratio = {len(observations)/256:.1f})")
     
     # 分析所有实验
     print("\n[2/4] Analyzing all experiments...")

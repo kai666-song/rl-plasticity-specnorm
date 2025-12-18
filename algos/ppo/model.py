@@ -77,16 +77,15 @@ class PPOModel(torch.nn.Module):
         """
         前向传播
         
-        输入维度处理说明：
-        - 输入 x 可以是任意形状，只要总元素数等于 obs_size
-        - Encoder 内部使用 nn.Unflatten 恢复图像形状 (B, C, H, W)
-        - 这里的 view 操作是为了统一接口，让 Encoder 接收 (B, obs_size) 的输入
-        
-        注意：这种设计是为了兼容现有的 Encoder 架构（内部有 Unflatten）
-        如果要完全消除这个 view，需要重构整个 Encoder 接口
+        输入维度处理：
+        - Encoder 现在支持灵活的输入格式（4D 或 2D）
+        - 如果输入是 4D (B, C, H, W)，直接传给 Encoder
+        - 如果输入是其他形状，先 reshape 为 2D (B, obs_size)
+        - Encoder 内部会智能处理维度转换
         """
-        # 将输入展平为 (batch, obs_size)，Encoder 内部会恢复空间结构
-        x = x.view(-1, self.obs_size)
+        # 智能维度处理：保持 4D 输入不变，其他情况 reshape 为 2D
+        if x.dim() != 4:
+            x = x.view(-1, self.obs_size)
         
         if self.split_encoder:
             x_policy = self.policy_encoder(x)

@@ -53,44 +53,80 @@ EXPERIMENTS = {
 
 
 def load_model_and_get_features(checkpoint_path, sample_obs):
-    """加载模型并获取特征"""
-    checkpoint = torch.load(checkpoint_path, weights_only=False, map_location='cpu')
+    """
+    加载模型并获取特征
     
-    # 从checkpoint获取模型参数
+    改进：自动从 checkpoint 推断模型配置，无需硬编码
+    """
+    checkpoint = torch.load(checkpoint_path, weights_only=False, map_location='cpu')
     model_state = checkpoint['model_state_dict']
     
-    # 推断模型配置
-    # 检查是否有specnorm (通过检查权重名称中是否有weight_orig)
-    has_specnorm = any('weight_orig' in k for k in model_state.keys())
+    # 尝试从 checkpoint 读取 hyperparams（如果保存了）
+    if 'hyperparams' in checkpoint:
+        hp = checkpoint['hyperparams']
+        model_params = hp.get('model', {})
+    else:
+        # 从权重结构推断配置
+        has_specnorm = any('weight_orig' in k for k in model_state.keys())
+        
+        # 推断 enc_type：检查第一个卷积层的输出通道数
+        # conv64 第一层输出 32 通道，conv32 输出 16 通道
+        first_conv_key = None
+        for k in model_state.keys():
+            if 'encoder.encoder.0.weight' in k or 'encoder.0.weight' in k:
+                first_conv_key = k
+                break
+        
+        if first_conv_key and model_state[first_conv_key].shape[0] == 32:
+            enc_type = 'conv64'
+        elif first_conv_key and model_state[first_conv_key].shape[0] == 16:
+            enc_type = 'conv32'
+        else:
+            enc_type = 'conv64'  # 默认
+        
+        # 推断 h_size：从最后一个线性层的输出维度
+        h_size = 256  # 默认
+        for k in model_state.keys():
+            if 'policy.weight' in k:
+                h_size = model_state[k].shape[1]
+                break
+        
+        model_params = {
+            'enc_type': enc_type,
+            'h_size': h_size,
+            'lr': 0.0005,
+            'l2_norm': 0.0,
+            'l2_init': 0.0,
+            'w2_init': 0.0,
+            'redo_weight': 0.0,
+            'redo_freq': 10,
+            'activation': 'relu',
+            'layernorm': False,
+            'rmsnorm': False,
+            'specnorm': has_specnorm,
+            'adapt_info': ['none', None],
+        }
     
-    model_params = {
-        'enc_type': 'conv64',
-        'h_size': 256,
-        'lr': 0.0005,
-        'l2_norm': 0.0,
-        'l2_init': 0.0,
-        'w2_init': 0.0,
-        'redo_weight': 0.0,
-        'redo_freq': 10,
-        'activation': 'relu',
-        'layernorm': False,
-        'rmsnorm': False,
-        'specnorm': has_specnorm,
-        'adapt_info': ['none', None],
-    }
+    # 根据 enc_type 确定输入参数
+    enc_type = model_params.get('enc_type', 'conv64')
+    if enc_type == 'conv64':
+        obs_size, depth = 64 * 64 * 3, 3
+    elif enc_type == 'conv32':
+        obs_size, depth = 32 * 32 * 3, 3
+    elif enc_type == 'conv11':
+        obs_size, depth = 11 * 11 * 3, 3
+    else:
+        obs_size, depth = 64 * 64 * 3, 3
     
-    obs_size = 64 * 64 * 3
-    act_size = 9  # CoinRun has 9 actions
-    depth = 3
+    act_size = 9  # CoinRun
     
     model = PPOModel(obs_size, act_size, depth, model_params)
     model.load_state_dict(model_state)
     model.eval()
     
-    # 获取编码器输出特征
+    # 获取编码器输出特征（Encoder 现在支持灵活输入）
     with torch.no_grad():
-        x = sample_obs.view(-1, obs_size)
-        features = model.encoder(x)
+        features = model.encoder(sample_obs)
     
     return features
 
@@ -150,8 +186,9 @@ def plot_singular_value_spectrum(output_path):
     """绘制奇异值谱对比图"""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=150)
     
-    # 【关键】使用真实环境数据，确保 N >> D (1000 >> 256)
-    sample_obs = collect_real_observations(num_samples=1000)
+    # 【关键】使用真实环境数据，确保 N >= 10*D (2560 >= 10*256)
+    # 这样奇异值谱尾部才能平滑衰减，而不是被统计噪声截断
+    sample_obs = collect_real_observations(num_samples=2560)
     
     all_sv = {}
     all_eff_rank = {}

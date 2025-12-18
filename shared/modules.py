@@ -245,14 +245,15 @@ class ConvEncoder(nn.Module):
     卷积编码器，支持多种归一化方法
     
     输入/输出维度说明：
-    - 输入: (batch_size, obs_size) 其中 obs_size = C * H * W
-    - 内部使用 nn.Unflatten 恢复为 (batch_size, C, H, W) 进行卷积
+    - 输入支持两种格式（自动检测）：
+      1. 4D 张量 (B, C, H, W) - 直接进行卷积
+      2. 2D 张量 (B, C*H*W) - 自动 reshape 为 4D
     - 输出: (batch_size, h_size) 特征向量
     
-    设计说明：
-    - 这种"先压扁再还原"的设计是为了统一 Linear/Conv Encoder 的接口
-    - 虽然不是最优雅的设计，但保证了模块的可替换性
-    - 如需完全消除这个模式，需要重构整个 Encoder 接口和调用方
+    设计改进：
+    - 移除了 nn.Unflatten，改为在 forward 中动态处理
+    - 支持直接传入 4D 图像张量，无需预先 flatten
+    - 保持向后兼容：2D 输入会自动 reshape
     
     Args:
         h_size: 输出特征维度
@@ -269,11 +270,12 @@ class ConvEncoder(nn.Module):
         super().__init__()
         self.depth = depth
         self.h_size = h_size
+        self.conv_size = conv_size  # 保存图像尺寸用于 reshape
         self.activation = activation
         self.layernorm = layernorm
         self.rmsnorm = rmsnorm
         self.specnorm = specnorm
-        self.encoder = getattr(self, f"conv{conv_size}")()
+        self.encoder = getattr(self, f"_build_conv{conv_size}")()
 
     def _maybe_spectral_norm(self, layer):
         """
@@ -323,13 +325,13 @@ class ConvEncoder(nn.Module):
         use_groupnorm = self.layernorm  # LayerNorm 在卷积层用 GroupNorm(1) 替代
         return map_activation(self.activation, out_channels, False, use_groupnorm, False)
 
-    def conv11(self):
+    def _build_conv11(self):
+        """构建 11x11 输入的卷积网络（不含 Unflatten）"""
         if self.activation != "crelu":
             conv_depths = [16, 16, 32, 32, 64, self.h_size]
         else:
             conv_depths = [8, 16, 16, 32, 32, self.h_size // 2]
         return nn.Sequential(
-            nn.Unflatten(1, (self.depth, 11, 11)),
             self._maybe_spectral_norm(nn.Conv2d(self.depth, conv_depths[0], 3, 1, 0)),
             self.map_conv_activation(conv_depths[0]),
             self._maybe_spectral_norm(nn.Conv2d(conv_depths[1], conv_depths[2], 3, 1, 0)),
@@ -341,13 +343,13 @@ class ConvEncoder(nn.Module):
             map_activation(self.activation, self.h_size, self.layernorm, False, self.rmsnorm),
         )
 
-    def conv32(self):
+    def _build_conv32(self):
+        """构建 32x32 输入的卷积网络（不含 Unflatten）"""
         if self.activation != "crelu":
             conv_depths = [16, 16, 32, 32, 64, self.h_size]
         else:
             conv_depths = [8, 16, 16, 32, 32, self.h_size // 2]
         return nn.Sequential(
-            nn.Unflatten(1, (self.depth, 32, 32)),
             self._maybe_spectral_norm(nn.Conv2d(self.depth, conv_depths[0], 4, 2, 1)),
             self.map_conv_activation(conv_depths[0]),
             self._maybe_spectral_norm(nn.Conv2d(conv_depths[1], conv_depths[2], 4, 2, 1)),
@@ -359,13 +361,13 @@ class ConvEncoder(nn.Module):
             map_activation(self.activation, self.h_size, self.layernorm, False, self.rmsnorm),
         )
 
-    def conv64(self):
+    def _build_conv64(self):
+        """构建 64x64 输入的卷积网络（不含 Unflatten）"""
         if self.activation != "crelu":
             conv_depths = [32, 32, 64, 64, 128, 128, 128, self.h_size]
         else:
             conv_depths = [16, 32, 32, 64, 64, 128, 64, self.h_size // 2]
         return nn.Sequential(
-            nn.Unflatten(1, (self.depth, 64, 64)),
             self._maybe_spectral_norm(nn.Conv2d(self.depth, conv_depths[0], 4, 2, 1)),
             self.map_conv_activation(conv_depths[0]),
             self._maybe_spectral_norm(nn.Conv2d(conv_depths[1], conv_depths[2], 4, 2, 1)),
@@ -401,6 +403,29 @@ class ConvEncoder(nn.Module):
             raise NotImplementedError
 
     def forward(self, x, check=False):
+        """
+        前向传播，支持灵活的输入格式
+        
+        Args:
+            x: 输入张量，支持两种格式：
+               - 4D: (B, C, H, W) - 直接进行卷积
+               - 2D: (B, C*H*W) - 自动 reshape 为 4D
+            check: 是否返回诊断信息（dead_units, eff_rank）
+        
+        Returns:
+            如果 check=False: 特征向量 (B, h_size)
+            如果 check=True: (特征向量, dead_units, eff_rank)
+        """
+        # 智能维度处理：支持 4D 和 2D 输入
+        if x.dim() == 2:
+            # 2D 输入 (B, C*H*W) -> reshape 为 4D (B, C, H, W)
+            x = x.view(-1, self.depth, self.conv_size, self.conv_size)
+        elif x.dim() == 4:
+            # 4D 输入 (B, C, H, W) -> 直接使用
+            pass
+        else:
+            raise ValueError(f"Expected 2D or 4D input, got {x.dim()}D tensor with shape {x.shape}")
+        
         x = self.encoder(x)
 
         if check:
