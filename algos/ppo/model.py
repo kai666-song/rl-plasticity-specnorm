@@ -1,3 +1,5 @@
+from typing import Any, Union
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -11,7 +13,20 @@ from shared.modules import (
 
 
 class PPOModel(torch.nn.Module):
-    def __init__(self, obs_size, act_size, depth, model_params):
+    """
+    PPO 模型
+    
+    包含共享编码器、策略头和价值头的 Actor-Critic 网络。
+    支持多种归一化方法（LayerNorm, RMSNorm, Spectral Norm）和激活函数。
+    """
+    
+    def __init__(
+        self,
+        obs_size: int,
+        act_size: int,
+        depth: int,
+        model_params: dict[str, Any]
+    ) -> None:
         super().__init__()
         self.split_encoder = False
         self.enc_type = model_params["enc_type"]
@@ -73,15 +88,21 @@ class PPOModel(torch.nn.Module):
             self.parameters(), lr=self.lr, weight_decay=self.l2_norm
         )
 
-    def forward(self, x, check=False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        check: bool = False
+    ) -> Union[tuple[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         前向传播
         
-        输入维度处理：
-        - Encoder 现在支持灵活的输入格式（4D 或 2D）
-        - 如果输入是 4D (B, C, H, W)，直接传给 Encoder
-        - 如果输入是其他形状，先 reshape 为 2D (B, obs_size)
-        - Encoder 内部会智能处理维度转换
+        Args:
+            x: 输入观测，支持 4D (B, C, H, W) 或 2D (B, obs_size)
+            check: 是否返回诊断信息（dead_units, eff_rank）
+        
+        Returns:
+            如果 check=False: (logits, value)
+            如果 check=True: (logits, value, dead_units, eff_rank)
         """
         # 智能维度处理：保持 4D 输入不变，其他情况 reshape 为 2D
         if x.dim() != 4:
@@ -136,7 +157,16 @@ class PPOModel(torch.nn.Module):
             new_policy = self.gen_policy(self.h_size, self.act_size)
             sp_module(self.policy, new_policy, shrink_p, perturb_p)
 
-    def sample_action(self, obs):
+    def sample_action(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        从策略中采样动作
+        
+        Args:
+            obs: 观测张量
+        
+        Returns:
+            (action, logits, value) 元组
+        """
         logits, value = self.forward(obs)
         action = torch.distributions.Categorical(logits=logits).sample()
         return action, logits, value.view(-1)

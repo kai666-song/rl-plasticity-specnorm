@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 import torch.nn.functional as F
 import torch.distributions as dist
@@ -10,15 +12,24 @@ EPSILON = 1e-8
 
 
 class PPOTrainer(BaseTrainer):
+    """
+    PPO (Proximal Policy Optimization) 训练器
+    
+    实现了 PPO 算法的核心训练逻辑，包括：
+    - GAE (Generalized Advantage Estimation) 优势估计
+    - Clipped surrogate objective 裁剪目标函数
+    - 可选的诊断信息计算（dead_units, eff_rank）
+    """
+    
     def __init__(
         self,
-        model,
-        env,
-        trainer_params,
-        test_env,
-        session_name,
-        experiment_name,
-    ):
+        model: torch.nn.Module,
+        env: Any,
+        trainer_params: dict[str, Any],
+        test_env: Any,
+        session_name: str,
+        experiment_name: str,
+    ) -> None:
         super().__init__(
             model, env, trainer_params, test_env, session_name, experiment_name
         )
@@ -30,7 +41,16 @@ class PPOTrainer(BaseTrainer):
         self.clip_param = trainer_params["clip_param"]
         self.result_dict = {stat: [] for stat in self.stat_list()}
 
-    def train(self, epoch):
+    def train(self, epoch: int) -> dict[str, list]:
+        """
+        执行一个 epoch 的训练
+        
+        Args:
+            epoch: 当前 epoch 编号
+        
+        Returns:
+            包含所有训练指标的字典
+        """
         if epoch in self.shift_points:
             self.shift_dist()
         buffer_obs = []
@@ -113,18 +133,37 @@ class PPOTrainer(BaseTrainer):
 
     def update_model(
         self,
-        buffer_obs,
-        buffer_actions,
-        buffer_advantages,
-        buffer_logits,
-        buffer_values,
-        epoch,
-    ):
+        buffer_obs: torch.Tensor,
+        buffer_actions: torch.Tensor,
+        buffer_advantages: torch.Tensor,
+        buffer_logits: torch.Tensor,
+        buffer_values: torch.Tensor,
+        epoch: int,
+    ) -> tuple[float, float, float, float, float, float, float]:
+        """
+        更新模型参数
+        
+        Args:
+            buffer_obs: 观测数据 (N, obs_dim)
+            buffer_actions: 动作数据 (N,)
+            buffer_advantages: 优势估计 (N,)
+            buffer_logits: 旧策略的 logits (N, act_dim)
+            buffer_values: 旧价值估计 (N,)
+            epoch: 当前 epoch 编号
+        
+        Returns:
+            (pg_loss, v_loss, entropy, grad_norm, v_error, dead_units, eff_rank)
+        """
         buffer_advantages = buffer_advantages.to(self.device).detach()
         buffer_actions = buffer_actions.to(self.device).detach()
         value_targets = buffer_advantages + buffer_values.detach()
         old_log_probs = F.log_softmax(buffer_logits, dim=-1).detach()
         old_log_probs = old_log_probs.gather(1, buffer_actions.unsqueeze(1)).squeeze(1)
+
+        # 性能优化：仅在 logging interval (每 10 个 epoch) 计算诊断信息
+        # SVD 计算 (eff_rank) 非常消耗资源，且 batch_size (64) < h_size (256) 时结果无意义
+        # 真实的秩分析应在 analyze_features.py 中用大批量 (N >> D) 离线计算
+        should_compute_diagnostics = (epoch % 10 == 0)
 
         total_pg_loss = []
         total_v_loss = []
@@ -146,12 +185,19 @@ class PPOTrainer(BaseTrainer):
                 batch_adv = buffer_advantages[batch]
                 batch_adv = (batch_adv - batch_adv.mean()) / (batch_adv.std() + EPSILON)
                 batch_old_log_probs = old_log_probs[batch]
-                # 注意：训练时只检查 dead_units，不计算 eff_rank
-                # 因为 batch_size (64) < h_size (256)，会导致秩被截断
-                # eff_rank 应该在测试脚本中用大批量 (N >> D) 计算
-                batch_logits, batch_values, batch_dead, batch_eff_rank = self.model(
-                    batch_obs.to(self.device), check=True
-                )
+                
+                # 仅在 logging interval 计算诊断信息 (dead_units, eff_rank)
+                # 这大幅减少了训练时的 SVD 计算开销
+                if should_compute_diagnostics:
+                    batch_logits, batch_values, batch_dead, batch_eff_rank = self.model(
+                        batch_obs.to(self.device), check=True
+                    )
+                else:
+                    batch_logits, batch_values = self.model(
+                        batch_obs.to(self.device), check=False
+                    )
+                    batch_dead = torch.tensor(0.0)
+                    batch_eff_rank = torch.tensor(-1.0)  # -1.0 表示未计算
                 # batch_eff_rank 在训练时仅作参考，真实秩分析见 analyze_features.py
                 batch_new_log_probs = F.log_softmax(batch_logits, dim=-1)
                 batch_new_log_probs = batch_new_log_probs.gather(
@@ -223,8 +269,31 @@ class PPOTrainer(BaseTrainer):
             redo_reset(self.model, batch_obs.to(self.device), self.model.redo_weight)
         return pg_loss, v_loss, e_loss, grad_norm, v_error, dead_units, eff_rank
 
-    def gae(self, rewards, values, next_value, dones):
-        # generalized advantage estimation
+    def gae(
+        self,
+        rewards: tuple,
+        values: list[torch.Tensor],
+        next_value: float,
+        dones: tuple
+    ) -> list[float]:
+        """
+        计算 Generalized Advantage Estimation (GAE)
+        
+        GAE 通过指数加权平均 TD 误差来估计优势函数，
+        在偏差和方差之间取得平衡。
+        
+        Args:
+            rewards: 奖励序列
+            values: 价值估计序列
+            next_value: 下一状态的价值估计
+            dones: 终止标志序列
+        
+        Returns:
+            优势估计列表
+        
+        Reference:
+            Schulman et al., "High-Dimensional Continuous Control Using GAE", ICLR 2016
+        """
         values = values + [next_value]
         gae = 0
         advantages = []

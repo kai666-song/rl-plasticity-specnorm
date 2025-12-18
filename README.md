@@ -26,6 +26,81 @@
 
 ---
 
+## 🚀 How to Reproduce
+
+### Dependencies
+
+| Package | Version |
+|:--------|:--------|
+| Python | 3.10+ |
+| PyTorch | 2.0+ |
+| NumPy | 1.24+ |
+| Matplotlib | 3.7+ |
+| ProcGen | 0.10.7 |
+| TensorBoard | 2.13+ |
+
+### Installation
+
+```bash
+# Create conda environment
+conda create -n rlcourse python=3.10
+conda activate rlcourse
+
+# Install PyTorch (CUDA 12.1)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Quick Start (Single Seed)
+
+```bash
+# Run Spectral Norm experiment (recommended)
+python train.py -p hyperparams_quick.yaml -c specnorm -n specnorm_exp
+
+# Run Baseline experiment
+python train.py -p hyperparams_quick.yaml -c baseline -n baseline_exp
+
+# Run ReDo experiment
+python train.py -p hyperparams_quick.yaml -c redo -n redo_exp
+
+# Resume from checkpoint
+python train.py -p hyperparams_quick.yaml -n <exp_name> -r
+```
+
+### Multi-Seed Training (Recommended for Publication)
+
+```bash
+# Linux/Mac
+./run_seeds.sh specnorm 5    # Run Spectral Norm with 5 seeds
+./run_seeds.sh baseline 5    # Run Baseline with 5 seeds
+./run_seeds.sh redo 5        # Run ReDo with 5 seeds
+./run_seeds.sh all 5         # Run all methods with 5 seeds
+
+# Windows
+run_seeds.bat specnorm 5
+run_seeds.bat baseline 5
+```
+
+### Analysis & Visualization
+
+```bash
+# Generate comparison plots (single-seed and multi-seed)
+python plot_comparison.py
+
+# Analyze feature representations (SVD, dead neurons)
+python analyze_features.py
+
+# Analyze layer norms (check for gradient vanishing)
+python analyze_layer_norms.py
+
+# Verify Power Iteration accuracy
+python analyze_power_iteration.py
+```
+
+---
+
 ## 🎯 Research Question
 
 **How can we prevent plasticity loss (feature rank collapse & dead neurons) in deep reinforcement learning while maintaining training stability?**
@@ -60,82 +135,6 @@ We analyze features using **2,560 real ProcGen observations** (not Gaussian nois
 
 ---
 
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-# Create conda environment
-conda create -n rlcourse python=3.10
-conda activate rlcourse
-
-# Install PyTorch (CUDA 12.1)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Training
-
-```bash
-# Run Spectral Norm experiment (recommended)
-python train.py -p hyperparams_quick.yaml -n specnorm_exp
-
-# Run Baseline experiment
-python train.py -p hyperparams.yaml -n baseline_exp
-
-# Resume from checkpoint
-python train.py -p hyperparams_quick.yaml -n <exp_name> -r
-```
-
-### Analysis
-
-```bash
-# Generate comparison plots
-python plot_comparison.py
-
-# Analyze feature representations (SVD, dead neurons)
-python analyze_features.py
-
-# Generate singular value spectrum
-python plot_singular_values.py
-```
-
----
-
-## 📁 Project Structure
-
-```
-├── train.py                     # Training entry point
-├── analyze_features.py          # Feature analysis (SVD, dead neurons)
-├── plot_comparison.py           # Generate comparison figures
-├── plot_singular_values.py      # Singular value spectrum analysis
-│
-├── algos/ppo/
-│   ├── model.py                 # PPO model with Spectral Norm support
-│   └── trainer.py               # PPO trainer
-│
-├── shared/
-│   ├── modules.py               # Network modules (ConvEncoder, SN, etc.)
-│   ├── runner.py                # Experiment runner
-│   ├── trainer.py               # Base trainer
-│   └── plotting.py              # Plotting utilities
-│
-├── envs/
-│   └── mdps.py                  # ProcGen environment wrapper
-│
-├── results/
-│   ├── comparison_figures/      # Main result figures
-│   └── feature_analysis/        # SVD and activation analysis
-│
-├── hyperparams_quick.yaml       # Quick experiment config (3000 epochs)
-├── hyperparams.yaml             # Full experiment config
-└── requirements.txt             # Python dependencies
-```
-
----
-
 ## 🔬 Methodology
 
 ### Spectral Normalization
@@ -145,6 +144,12 @@ We apply Spectral Normalization to the **shared encoder only** (not the value he
 $$W_{SN} = \frac{W}{\sigma(W)}$$
 
 where $\sigma(W)$ is the largest singular value of $W$.
+
+**Training vs Evaluation:**
+- **Training**: Uses Power Iteration (1 iteration) for efficient approximation of $\sigma(W)$
+- **Evaluation**: Uses exact SVD computation for accurate analysis
+
+This distinction is important for reproducibility. Power Iteration is sufficient for training but exact SVD should be used for final analysis.
 
 **Why not apply SN to Value Network?**
 
@@ -164,6 +169,8 @@ This leads to **Value Underestimation Bias**, destabilizing policy gradients.
 | Task Shift Points | [1000, 2000] |
 | Hidden Size | 256 |
 | Learning Rate | 0.0005 |
+| Batch Size | 64 |
+| Buffer Size | 1024 |
 
 ---
 
@@ -181,28 +188,72 @@ This leads to **Value Underestimation Bias**, destabilizing policy gradients.
 
 ---
 
+## 📁 Project Structure
+
+```
+├── train.py                     # Training entry point
+├── run_seeds.sh/.bat            # Multi-seed training scripts
+├── analyze_features.py          # Feature analysis (SVD, dead neurons)
+├── analyze_layer_norms.py       # Layer norm analysis (gradient vanishing check)
+├── analyze_power_iteration.py   # Power Iteration vs SVD comparison
+├── plot_comparison.py           # Generate comparison figures
+│
+├── algos/ppo/
+│   ├── model.py                 # PPO model with Spectral Norm support
+│   └── trainer.py               # PPO trainer (optimized SVD computation)
+│
+├── shared/
+│   ├── modules.py               # Network modules (ConvEncoder, SN, etc.)
+│   ├── runner.py                # Experiment runner
+│   ├── trainer.py               # Base trainer
+│   └── plotting.py              # Plotting utilities
+│
+├── envs/
+│   └── mdps.py                  # ProcGen environment wrapper
+│
+├── results/
+│   ├── comparison_figures/      # Main result figures
+│   ├── feature_analysis/        # SVD and activation analysis
+│   └── multiseed/               # Multi-seed experiment results
+│
+├── hyperparams.yaml             # Full experiment config
+├── hyperparams_quick.yaml       # Quick experiment config (3000 epochs)
+├── hyperparams_multiseed.yaml   # Multi-seed experiment config
+└── requirements.txt             # Python dependencies
+```
+
+---
+
 ## 🔑 Key Implementation Details
 
-### 1. Flexible Input Handling
+### 1. Optimized SVD Computation
 
 ```python
-# ConvEncoder supports both 4D (B,C,H,W) and 2D (B, C*H*W) inputs
-def forward(self, x, check=False):
-    if x.dim() == 2:
-        x = x.view(-1, self.depth, self.conv_size, self.conv_size)
-    # ... convolution layers
+# SVD is only computed at logging intervals (every 10 epochs)
+# This significantly reduces training overhead
+should_compute_diagnostics = (epoch % 10 == 0)
 ```
 
-### 2. Cumulative Dead Neuron Statistics
+### 2. Batch Size Validation for Effective Rank
 
 ```python
-# Only neurons that NEVER activate are counted as "dead"
-# This distinguishes normal ReLU sparsity from true neuron death
-never_activated = (activation_counts == 0).float()
-dead_ratio = never_activated.mean().item()
+# Effective rank is only valid when N >= D
+# Training batch_size (64) < h_size (256) produces invalid results
+# Use analyze_features.py with N >= 2560 for valid analysis
+if N < D * min_ratio:
+    return torch.tensor(-1.0)  # Placeholder for invalid computation
 ```
 
-### 3. Real Environment Data for SVD
+### 3. Explicit Input Dimension Validation
+
+```python
+# ConvEncoder validates input dimensions explicitly
+# No silent auto-correction that could mask bugs
+if x.shape[1] != expected_flat_size:
+    raise ValueError(f"Expected shape (B, {expected_flat_size}), got {x.shape}")
+```
+
+### 4. Real Environment Data for SVD
 
 ```python
 # Use real ProcGen observations, NOT Gaussian noise!

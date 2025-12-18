@@ -127,7 +127,7 @@ dmypy.json
 # Project-specific ignores
 # ============================================
 
-# Large model checkpoint files
+# Large model checkpoint files (exclude from repo)
 *.pt
 *.pth
 *.ckpt
@@ -137,15 +137,17 @@ dmypy.json
 
 # TensorBoard logs
 **/logs/
+events.out.tfevents.*
 
-# Raw experiment data (keep only figures)
+# Raw experiment data directories (keep only figures)
 results/baseline/
 results/specnorm_experiment/
 results/ablation_studies/
 results/layernorm*/
 results/redo_reset/
+results/multiseed/
 
-# Keep important results
+# Keep important results (figures only)
 !results/comparison_figures/
 !results/feature_analysis/
 
@@ -159,11 +161,14 @@ results/redo_reset/
 *.out
 *.toc
 
-# LaTeX source files
-docs/main.tex
-docs/main.bbl
-docs/main.synctex.gz
+# LaTeX source files (optional - uncomment to exclude)
+# docs/main.tex
+# docs/main.bbl
+# docs/main.synctex.gz
 
-# Keep experiment report
+# Keep experiment report and assets
 !docs/实验报告.md
 !docs/assets/
+
+# Kiro spec files (development only)
+.kiro/

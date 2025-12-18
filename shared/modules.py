@@ -1,3 +1,5 @@
+from typing import Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,7 +8,16 @@ import copy
 import math
 
 
-def gen_encoder(obs_size, h_size, depth, enc_type, activation="relu", layernorm=False, rmsnorm=False, specnorm=False):
+def gen_encoder(
+    obs_size: int,
+    h_size: int,
+    depth: int,
+    enc_type: str,
+    activation: str = "relu",
+    layernorm: bool = False,
+    rmsnorm: bool = False,
+    specnorm: bool = False
+) -> nn.Module:
     """
     生成编码器网络 (Encoder Network Generator)
     
@@ -183,7 +194,7 @@ class RMSNorm(nn.Module):
         return (x / rms) * self.weight
 
 
-def compute_effective_rank(features):
+def compute_effective_rank(features: torch.Tensor, min_ratio: float = 1.0) -> torch.Tensor:
     """
     计算特征矩阵的有效秩 (Effective Rank)
     
@@ -191,15 +202,32 @@ def compute_effective_rank(features):
         eff_rank = exp(-sum(p_i * log(p_i)))
     其中 p_i = sigma_i / sum(sigma_j) 是归一化的奇异值分布
     
+    【重要】数学有效性约束：
+    当 batch_size (N) < feature_dim (D) 时，SVD 计算的秩会被截断为 N，
+    导致有效秩计算失去物理意义。因此：
+    - 训练时 batch_size=64 < h_size=256，计算结果无效
+    - 有效的秩分析应使用 N >= D（推荐 N >= 10*D）的大批量数据
+    - 真实秩分析请使用 analyze_features.py 离线计算
+    
     Args:
         features: 特征矩阵，形状为 (batch_size, feature_dim)
+        min_ratio: N/D 的最小比例要求，默认 1.0
+                   当 N < D * min_ratio 时返回 -1.0 占位符
     
     Returns:
-        float: 有效秩，范围从 1（所有信息集中在一个方向）到 min(batch, dim)（均匀分布）
+        torch.Tensor: 有效秩
+            - 正常情况：范围从 1（所有信息集中在一个方向）到 min(N, D)（均匀分布）
+            - N < D * min_ratio 时：返回 -1.0 表示计算无效
     
     Reference:
         Roy & Bhattacharya, "Effective Rank: A Measure of Effective Dimensionality", 2007
     """
+    N, D = features.shape
+    
+    # 批量大小验证：当 N < D * min_ratio 时，SVD 结果无意义
+    if N < D * min_ratio:
+        return torch.tensor(-1.0)
+    
     # 中心化特征
     features = features - features.mean(dim=0, keepdim=True)
     
@@ -402,29 +430,52 @@ class ConvEncoder(nn.Module):
         else:
             raise NotImplementedError
 
-    def forward(self, x, check=False):
+    def forward(self, x: torch.Tensor, check: bool = False):
         """
         前向传播，支持灵活的输入格式
         
         Args:
             x: 输入张量，支持两种格式：
                - 4D: (B, C, H, W) - 直接进行卷积
-               - 2D: (B, C*H*W) - 自动 reshape 为 4D
+               - 2D: (B, C*H*W) - 验证后 reshape 为 4D
             check: 是否返回诊断信息（dead_units, eff_rank）
         
         Returns:
             如果 check=False: 特征向量 (B, h_size)
             如果 check=True: (特征向量, dead_units, eff_rank)
+        
+        Raises:
+            ValueError: 如果输入维度不符合预期
         """
-        # 智能维度处理：支持 4D 和 2D 输入
+        # 显式维度验证：不再隐式自动纠错，而是明确检查输入格式
+        expected_flat_size = self.depth * self.conv_size * self.conv_size
+        
         if x.dim() == 2:
-            # 2D 输入 (B, C*H*W) -> reshape 为 4D (B, C, H, W)
+            # 2D 输入 (B, C*H*W) -> 验证后 reshape 为 4D (B, C, H, W)
+            if x.shape[1] != expected_flat_size:
+                raise ValueError(
+                    f"ConvEncoder input dimension mismatch: "
+                    f"expected 2D tensor with shape (B, {expected_flat_size}) "
+                    f"where {expected_flat_size} = C*H*W = {self.depth}*{self.conv_size}*{self.conv_size}, "
+                    f"but got shape {tuple(x.shape)}. "
+                    f"Check your data pipeline for dimension errors."
+                )
             x = x.view(-1, self.depth, self.conv_size, self.conv_size)
         elif x.dim() == 4:
-            # 4D 输入 (B, C, H, W) -> 直接使用
-            pass
+            # 4D 输入 (B, C, H, W) -> 验证形状后直接使用
+            if x.shape[1] != self.depth or x.shape[2] != self.conv_size or x.shape[3] != self.conv_size:
+                raise ValueError(
+                    f"ConvEncoder input shape mismatch: "
+                    f"expected 4D tensor with shape (B, {self.depth}, {self.conv_size}, {self.conv_size}), "
+                    f"but got shape {tuple(x.shape)}. "
+                    f"Check your data pipeline for dimension errors."
+                )
         else:
-            raise ValueError(f"Expected 2D or 4D input, got {x.dim()}D tensor with shape {x.shape}")
+            raise ValueError(
+                f"ConvEncoder expects 2D or 4D input tensor, "
+                f"but got {x.dim()}D tensor with shape {tuple(x.shape)}. "
+                f"Valid formats: (B, {expected_flat_size}) or (B, {self.depth}, {self.conv_size}, {self.conv_size})"
+            )
         
         x = self.encoder(x)
 
@@ -469,7 +520,21 @@ def map_activation(activation, h_size, layernorm=False, groupnorm=False, rmsnorm
 
 
 class LinearEncoder(nn.Module):
-    def __init__(self, obs_size, h_size, activation="relu", layernorm=False, rmsnorm=False, specnorm=False):
+    """
+    线性编码器，用于处理低维观测输入
+    
+    支持多种归一化方法和激活函数配置。
+    """
+    
+    def __init__(
+        self,
+        obs_size: int,
+        h_size: int,
+        activation: str = "relu",
+        layernorm: bool = False,
+        rmsnorm: bool = False,
+        specnorm: bool = False
+    ) -> None:
         super().__init__()
 
         if activation == "crelu":
@@ -498,7 +563,8 @@ class LinearEncoder(nn.Module):
 
         self.activation = activation
 
-    def calc_dead_units(self, x):
+    def calc_dead_units(self, x: torch.Tensor) -> torch.Tensor:
+        """计算死神经元比例"""
         if self.activation in ["ln-relu", "gn-relu", "relu", "crelu"]:
             return torch.mean((x == 0).float())
         elif self.activation == "leaky_relu":
@@ -516,7 +582,22 @@ class LinearEncoder(nn.Module):
         else:
             raise NotImplementedError
 
-    def forward(self, x, check=False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        check: bool = False
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """
+        前向传播
+        
+        Args:
+            x: 输入张量 (B, obs_size)
+            check: 是否返回诊断信息
+        
+        Returns:
+            如果 check=False: 特征向量 (B, h_size)
+            如果 check=True: (特征向量, dead_units, eff_rank)
+        """
         x = self.enc_a(x)
         x = self.enc_b(x)
 

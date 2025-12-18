@@ -2,30 +2,54 @@
 # Multi-Seed Experiment Configuration (多种子实验配置)
 # =============================================================================
 # 用于生成带阴影（标准差）的曲线，证明方法的稳定性
+# 强化学习方差巨大，单次运行的结果在学术上被视为无效
+# 
+# 【重要】所有方法使用完全相同的超参数，仅方法特定参数不同：
+# - baseline: 无特殊处理
+# - specnorm: model.specnorm=true
+# - redo: model.redo_weight=0.025, model.redo_freq=10
+# - layernorm: model.layernorm=true
 #
-# Usage: 
-#   python train.py -p hyperparams_multiseed.yaml -c baseline -o results/multiseed/baseline -n baseline
-#   python train.py -p hyperparams_multiseed.yaml -c specnorm -o results/multiseed/specnorm -n specnorm
-#   python train.py -p hyperparams_multiseed.yaml -c redo -o results/multiseed/redo -n redo
+# Usage (单种子): 
+#   python train.py -p hyperparams_multiseed.yaml -c baseline -s 0 -n baseline_seed0
+#   python train.py -p hyperparams_multiseed.yaml -c specnorm -s 0 -n specnorm_seed0
+#
+# Usage (多种子脚本):
+#   ./run_seeds.sh baseline 5
+#   ./run_seeds.sh specnorm 5
+#   ./run_seeds.sh redo 5
 # =============================================================================
 
 experiment:
   algo: ppo
   save_freq: 200
   
+  # 【公平性保证】所有方法使用相同的基础配置
+  # 仅以下参数在不同方法间有差异：
+  # - specnorm: model.specnorm
+  # - redo: model.redo_weight, model.redo_freq
+  # - layernorm: model.layernorm
   conditions:
     baseline:
       model.specnorm: false
+      model.redo_weight: 0.00
+      model.layernorm: false
     specnorm:
       model.specnorm: true
+      model.redo_weight: 0.00
+      model.layernorm: false
     redo:
+      model.specnorm: false
       model.redo_weight: 0.025
       model.redo_freq: 10
+      model.layernorm: false
     layernorm:
+      model.specnorm: false
+      model.redo_weight: 0.00
       model.layernorm: true
   
   name: null
-  num_sessions: 3  # 3个随机种子
+  num_sessions: 5  # 5个随机种子 (Seed 0-4)，确保统计显著性
 
 environment:
   name: procgen
