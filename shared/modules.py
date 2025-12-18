@@ -290,9 +290,21 @@ class ConvEncoder(nn.Module):
         return layer
 
     def map_conv_activation(self, out_channels):
-        # 卷积层中间不使用LayerNorm/RMSNorm（维度不兼容），改用GroupNorm
-        # 当layernorm=True时，在卷积层使用GroupNorm(1, channels)作为替代
-        use_groupnorm = self.layernorm  # LayerNorm在卷积层用GroupNorm替代
+        """
+        为卷积层生成激活函数（可选归一化）
+        
+        实现细节说明：
+        - 当 layernorm=True 时，在卷积层使用 GroupNorm(groups=1, channels) 替代 LayerNorm
+        - 这是因为标准 LayerNorm 期望输入形状为 (B, D)，无法直接处理 4D 卷积输出 (B, C, H, W)
+        - GroupNorm(1, C) 在数学上等价于对每个样本的所有通道做归一化，
+          类似于 LayerNorm 但能正确处理空间维度
+        - 在全连接层（Flatten 之后）则使用标准的 nn.LayerNorm
+        
+        Reference:
+            Wu & He, "Group Normalization", ECCV 2018
+            - GroupNorm(1, C) 也被称为 "Layer Normalization for CNNs"
+        """
+        use_groupnorm = self.layernorm  # LayerNorm 在卷积层用 GroupNorm(1) 替代
         return map_activation(self.activation, out_channels, False, use_groupnorm, False)
 
     def conv11(self):
