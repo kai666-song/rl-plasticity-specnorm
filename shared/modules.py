@@ -244,7 +244,23 @@ class ConvEncoder(nn.Module):
     """
     卷积编码器，支持多种归一化方法
     
+    输入/输出维度说明：
+    - 输入: (batch_size, obs_size) 其中 obs_size = C * H * W
+    - 内部使用 nn.Unflatten 恢复为 (batch_size, C, H, W) 进行卷积
+    - 输出: (batch_size, h_size) 特征向量
+    
+    设计说明：
+    - 这种"先压扁再还原"的设计是为了统一 Linear/Conv Encoder 的接口
+    - 虽然不是最优雅的设计，但保证了模块的可替换性
+    - 如需完全消除这个模式，需要重构整个 Encoder 接口和调用方
+    
     Args:
+        h_size: 输出特征维度
+        depth: 输入通道数 (C)
+        conv_size: 输入图像尺寸 (H=W)
+        activation: 激活函数类型
+        layernorm: 是否使用 LayerNorm (在卷积层用 GroupNorm(1) 替代)
+        rmsnorm: 是否使用 RMSNorm
         specnorm: 是否使用 Spectral Normalization
                   SN 通过约束权重的谱范数（最大奇异值）来稳定训练
                   可以防止特征秩崩溃，保持网络的表达能力

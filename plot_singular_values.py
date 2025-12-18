@@ -7,6 +7,10 @@
 生成 Baseline 和 Spectral Norm 的奇异值分布对比图，
 直接展示"防止秩崩溃"的数学证据。
 
+【重要】使用真实 ProcGen 环境数据，而非随机噪声！
+- 随机噪声无法代表网络对真实环境的处理能力
+- 必须使用真实游戏画面来评估特征秩
+
 使用方法:
     python plot_singular_values.py
 
@@ -18,8 +22,10 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from tqdm import tqdm
 from algos.ppo.model import PPOModel
 from shared.modules import compute_singular_values, compute_effective_rank
+from envs.mdps import ProcGenEnv
 
 # 设置字体
 plt.rcParams['font.family'] = ['DejaVu Sans', 'SimHei', 'sans-serif']
@@ -89,18 +95,63 @@ def load_model_and_get_features(checkpoint_path, sample_obs):
     return features
 
 
-def generate_sample_observations(batch_size=256):
-    """生成样本观测（随机噪声，用于分析特征空间）"""
-    # 使用随机噪声作为输入
-    obs = torch.randn(batch_size, 64 * 64 * 3)
-    return obs
+def collect_real_observations(num_samples=1000, num_envs=8, seed=42):
+    """
+    从真实 ProcGen 环境收集观测数据
+    
+    【关键改进】使用真实游戏画面而非随机噪声！
+    
+    Args:
+        num_samples: 目标样本数量（建议 >= 1000，确保 N >> D=256）
+        num_envs: 并行环境数量
+        seed: 随机种子
+    
+    Returns:
+        observations: (N, obs_dim) 的真实观测数据
+    """
+    print(f"Collecting {num_samples} real observations from ProcGen CoinRun...")
+    
+    # 创建多个环境并行采样
+    envs = []
+    for i in range(num_envs):
+        env = ProcGenEnv(
+            shift_type='permute',
+            task='coinrun_100',
+            train=False,
+            seed=seed + i
+        )
+        envs.append(env)
+    
+    observations = []
+    obs_list = [env.reset() for env in envs]
+    
+    pbar = tqdm(total=num_samples, desc="Collecting real observations")
+    
+    while len(observations) < num_samples:
+        for i, env in enumerate(envs):
+            observations.append(obs_list[i])
+            # 随机动作探索环境
+            action = np.random.randint(0, env.action_space.n)
+            obs, reward, done, _ = env.step(action)
+            if done:
+                obs = env.reset()
+            obs_list[i] = obs
+        pbar.update(num_envs)
+    
+    pbar.close()
+    
+    # 堆叠并返回
+    result = torch.stack(observations[:num_samples])
+    print(f"Collected {len(result)} observations, shape: {result.shape}")
+    return result
 
 
 def plot_singular_value_spectrum(output_path):
     """绘制奇异值谱对比图"""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=150)
     
-    sample_obs = generate_sample_observations(batch_size=256)
+    # 【关键】使用真实环境数据，确保 N >> D (1000 >> 256)
+    sample_obs = collect_real_observations(num_samples=1000)
     
     all_sv = {}
     all_eff_rank = {}

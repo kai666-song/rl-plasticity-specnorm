@@ -146,9 +146,13 @@ class PPOTrainer(BaseTrainer):
                 batch_adv = buffer_advantages[batch]
                 batch_adv = (batch_adv - batch_adv.mean()) / (batch_adv.std() + EPSILON)
                 batch_old_log_probs = old_log_probs[batch]
+                # 注意：训练时只检查 dead_units，不计算 eff_rank
+                # 因为 batch_size (64) < h_size (256)，会导致秩被截断
+                # eff_rank 应该在测试脚本中用大批量 (N >> D) 计算
                 batch_logits, batch_values, batch_dead, batch_eff_rank = self.model(
                     batch_obs.to(self.device), check=True
                 )
+                # batch_eff_rank 在训练时仅作参考，真实秩分析见 analyze_features.py
                 batch_new_log_probs = F.log_softmax(batch_logits, dim=-1)
                 batch_new_log_probs = batch_new_log_probs.gather(
                     1, batch_actions.unsqueeze(1)
