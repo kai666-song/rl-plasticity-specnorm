@@ -1,13 +1,23 @@
-gym
-torch
-torchvision
-numpy
-matplotlib
-procgen
-tensorboard
-statsmodels
-scipy
-pylatex
-statsmodels
-git+https://github.com/awjuliani/neuro-nav
-rliable
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+
+# Reinforcement Learning
+gym==0.26.2
+procgen>=0.10.7
+
+# Visualization
+matplotlib>=3.7.0
+tensorboard>=2.13.0
+
+# Scientific computing
+scipy>=1.10.0
+statsmodels>=0.14.0
+
+# Progress bar
+tqdm>=4.65.0
+
+# Optional: for advanced analysis
+# rliable>=1.0.8
+# scikit-learn>=1.2.0

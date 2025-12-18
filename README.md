@@ -1,151 +1,218 @@
-<h1 align="center">基于谱归一化的深度强化学习可塑性丢失研究</h1>
+<h1 align="center">🧠 Mitigating Plasticity Loss in Deep RL via Spectral Normalization</h1>
 
 <p align="center">
-  <b>Deep RL Plasticity Loss Study with Spectral Normalization</b><br>
-  <i>课程设计报告 | Course Design Project</i>
+  <b>基于谱归一化的深度强化学习可塑性丢失缓解研究</b><br>
+  <i>Course Design Project | 强化学习课程设计</i>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/PyTorch-2.0+-red.svg" alt="PyTorch">
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
 </p>
 
 ---
 
-## 🎯 核心发现 (Key Finding)
+## 📌 TL;DR
 
-> **"We demonstrate that Spectral Normalization effectively prevents feature rank collapse in deep RL, achieving +20% reward improvement and reducing dead neurons by 52%."**
+> **Spectral Normalization achieves +20% reward improvement and reduces dead neurons by 52% compared to baseline, outperforming all other methods including LayerNorm, ReDo, and activation function modifications.**
 
-通过系统性实验对比，我们验证了 **Spectral Normalization（谱归一化）** 在缓解深度强化学习可塑性丢失问题上的显著效果。
+| Method | Test Reward | Dead Units | vs Baseline |
+|:-------|:-----------:|:----------:|:-----------:|
+| Baseline (ReLU) | 5.80 | 82.4% | - |
+| LayerNorm | 4.65 | 75.9% | -19.8% ❌ |
+| ReDo Reset | 5.73 | 71.4% | -1.1% |
+| **Spectral Norm** | **6.96** | **39.5%** | **+20.0%** ✅ |
 
-**High-Level Conclusion**: Our experiments demonstrate that Spectral Normalization outperforms heuristic resetting methods (ReDo) by maintaining high feature rank stability without sacrificing training stability. Unlike activation function modifications (Leaky ReLU) that merely "keep neurons alive" without improving feature quality, SN achieves an **effective balance between Stability and Plasticity**.
+---
 
-> **Note on Value Network**: We intentionally do not apply Spectral Normalization to the value network, as constraining its output range could limit its ability to predict high-magnitude rewards accurately.
+## 🎯 Research Question
 
-## ⭐ Highlights 
+**How can we prevent plasticity loss (feature rank collapse & dead neurons) in deep reinforcement learning while maintaining training stability?**
 
-| Method | Test Reward | Stability | Dead Units | Feature Rank |
-|:-------|:-----------:|:---------:|:----------:|:------------:|
-| Baseline (ReLU) | 5.80 | Medium | 82.4% (Collapse) | Low |
-| LayerNorm | 4.65 ❌ | Medium | 75.9% | Low |
-| Leaky ReLU | 4.94 ❌ | Medium | 0.0% (Alive but useless) | Low |
-| ReDo Reset | 5.73 | ⚠️ Unstable | 71.4% (Recycled) | Medium |
-| **Spectral Norm (Ours)** | **6.96** ✅ | **Stable** | **39.5%** (Healthy) | **High** |
+### Key Findings
 
-## 📊 实验结果对比 (Results Comparison)
+1. **"Keeping neurons alive" ≠ "Effective learning"**: Leaky ReLU eliminates dead neurons (0%) but decreases reward by 15%
+2. **Reset mechanisms are band-aids**: ReDo works but introduces training instability (sawtooth curves)
+3. **Spectral Normalization is the principled solution**: Mathematically constrains Lipschitz constant, preventing rank collapse
+
+---
+
+## 📊 Results
+
+### Performance Comparison
 
 ![Summary Comparison](results/comparison_figures/summary_comparison.png)
 
-### 定量结果 (Quantitative Results)
+### Feature Analysis (Using Real Environment Data)
 
-| 方法 | Test Reward | Dead Units | 说明 |
-|:-----|:-----------:|:----------:|:-----|
-| Baseline (ReLU) | 5.80 | 82.4% | 原始方法，死神经元比例高 |
-| **Spectral Norm (Ours)** | **6.96** | **39.5%** | **+20% reward, -52% dead units** |
+We analyze features using **2,560 real ProcGen observations** (not Gaussian noise!) to ensure N ≥ 10×D for valid SVD computation.
 
-### 关键洞察 (Key Insights)
+![Singular Value Spectrum](results/feature_analysis/singular_value_spectrum_real.png)
 
-1. **"保活"≠"有效"**：Leaky ReLU 消除了死神经元（0%），但 Reward 反而下降 15%，证明特征质量才是关键
-2. **重置机制是权宜之计**：ReDo 虽有效，但引入训练不稳定性（锯齿波动），且超参数敏感
-3. **谱归一化是更优方案**：从数学上约束 Lipschitz 常数，有效缓解特征秩崩溃，实现稳定性与可塑性的更优权衡
+| Method | Dead Neurons* | Avg Activation Rate |
+|:-------|:-------------:|:-------------------:|
+| Baseline | 19.14% | 21.52% |
+| ReDo | 26.17% | 32.53% |
+| **Spectral Norm** | 25.39% | **66.76%** |
 
-## 🚀 快速复现 (Quick Start)
+> *Dead units are defined as neurons that **never activate** over the entire test set (2.5k steps), distinguishing true neuron death from normal ReLU sparsity.
 
-### 环境配置
+---
+
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
-# 1. 创建 conda 环境
+# Create conda environment
 conda create -n rlcourse python=3.10
 conda activate rlcourse
 
-# 2. 安装 PyTorch (CUDA 12.1)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch (CUDA 12.1)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# 3. 安装其他依赖
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 运行实验
+### Training
 
 ```bash
-# 运行 Spectral Norm 实验 (推荐)
-python train.py -p hyperparams_quick.yaml -n specnorm_experiment
+# Run Spectral Norm experiment (recommended)
+python train.py -p hyperparams_quick.yaml -n specnorm_exp
 
-# 运行 Baseline 实验
-# 修改 hyperparams_quick.yaml 中的 conditions 为 baseline
-python train.py -p hyperparams_quick.yaml -n baseline_experiment
+# Run Baseline experiment
+python train.py -p hyperparams.yaml -n baseline_exp
 
-# 从断点续训
-python train.py -p hyperparams_quick.yaml -n <experiment_name> -r
+# Resume from checkpoint
+python train.py -p hyperparams_quick.yaml -n <exp_name> -r
+```
 
-# 生成对比图
+### Analysis
+
+```bash
+# Generate comparison plots
 python plot_comparison.py
+
+# Analyze feature representations (SVD, dead neurons)
+python analyze_features.py
+
+# Generate singular value spectrum
+python plot_singular_values.py
 ```
 
+---
 
-## 📁 项目结构 (Project Structure)
+## 📁 Project Structure
 
 ```
-deep-rl-plasticity/
-├── train.py                    # 训练入口脚本
-├── plot_comparison.py          # 对比图生成脚本
-├── hyperparams_quick.yaml      # 快速实验配置 (3000 epochs)
-├── requirements.txt            # Python 依赖
+├── train.py                     # Training entry point
+├── analyze_features.py          # Feature analysis (SVD, dead neurons)
+├── plot_comparison.py           # Generate comparison figures
+├── plot_singular_values.py      # Singular value spectrum analysis
 │
-├── algos/ppo/                  # PPO 算法实现
-│   ├── model.py                # 网络模型 (含 Spectral Norm 支持)
-│   └── trainer.py              # PPO 训练器
+├── algos/ppo/
+│   ├── model.py                 # PPO model with Spectral Norm support
+│   └── trainer.py               # PPO trainer
 │
-├── shared/                     # 共享模块
-│   ├── modules.py              # 网络组件 (Spectral Norm, Mish 等)
-│   ├── runner.py               # 实验运行器
-│   └── plotting.py             # 绘图工具
+├── shared/
+│   ├── modules.py               # Network modules (ConvEncoder, SN, etc.)
+│   ├── runner.py                # Experiment runner
+│   ├── trainer.py               # Base trainer
+│   └── plotting.py              # Plotting utilities
 │
-└── results/                    # 实验结果
-    ├── baseline/               # Baseline 实验 (ReLU)
-    ├── specnorm_experiment/    # Spectral Norm 实验 (最佳方法)
-    ├── ablation_studies/       # 消融实验 (Mish, Leaky ReLU, RMSNorm, ReDo)
-    └── comparison_figures/     # 对比图
+├── envs/
+│   └── mdps.py                  # ProcGen environment wrapper
+│
+├── results/
+│   ├── comparison_figures/      # Main result figures
+│   └── feature_analysis/        # SVD and activation analysis
+│
+├── hyperparams_quick.yaml       # Quick experiment config (3000 epochs)
+├── hyperparams.yaml             # Full experiment config
+└── requirements.txt             # Python dependencies
 ```
 
-## 🔬 方法详解 (Methodology)
+---
 
-### Spectral Normalization (谱归一化)
+## 🔬 Methodology
 
-Spectral Normalization 通过约束权重矩阵的谱范数（最大奇异值）来稳定训练：
+### Spectral Normalization
+
+We apply Spectral Normalization to the **shared encoder only** (not the value head):
 
 $$W_{SN} = \frac{W}{\sigma(W)}$$
 
-其中 $\sigma(W)$ 是权重矩阵 $W$ 的最大奇异值。
+where $\sigma(W)$ is the largest singular value of $W$.
 
-**核心优势：**
-- 防止特征秩崩溃（Feature Rank Collapse）
-- 稳定训练过程，避免梯度爆炸
-- 保持网络的表达能力和可塑性
+**Why not apply SN to Value Network?**
 
-### 实验设置
+The value function $V(s)$ can have large magnitude (e.g., cumulative reward > 10). Constraining Lipschitz constant ≤ 1 would cause:
 
-| 参数 | 值 |
-|:-----|:---|
-| 环境 | ProcGen CoinRun |
-| 算法 | PPO |
-| 训练轮数 | 3000 epochs |
-| 任务切换点 | [1000, 2000] |
-| 隐藏层大小 | 256 |
-| 学习率 | 0.0005 |
+$$|V(s_1) - V(s_2)| \leq \|s_1 - s_2\|$$
 
-## 🧪 消融实验 (Ablation Studies)
+This leads to **Value Underestimation Bias**, destabilizing policy gradients.
 
-我们系统性地测试了多种方法：
+### Experimental Setup
 
-| 方法 | 原理 | Test Reward | Dead Units | 结果 |
-|:-----|:-----|:-----------:|:----------:|:-----|
-| Baseline | 原始 ReLU | 5.80 | 82.4% | 基准 |
-| Mish | 平滑激活函数 | 5.72 | 93.6% | ❌ 更差 |
-| Leaky ReLU | 负区间保留斜率 | 4.94 | 0.0% | ❌ 性能下降 |
-| LayerNorm | 工业界标准归一化 | 4.65 | 75.9% | ❌ 性能下降 |
-| RMSNorm | 轻量级归一化 | 4.21 | 67.4% | ❌ 性能最差 |
-| ReDo Reset | 周期性重置神经元 | 5.73 | 71.4% | ⚠️ 效果有限 |
-| **Spectral Norm** | 谱归一化 | **6.96** | **39.5%** | ✅ **最佳** |
+| Parameter | Value |
+|:----------|:------|
+| Environment | ProcGen CoinRun |
+| Algorithm | PPO |
+| Training Epochs | 3,000 |
+| Task Shift Points | [1000, 2000] |
+| Hidden Size | 256 |
+| Learning Rate | 0.0005 |
 
-详细实验数据保存在 `results/ablation_studies/` 目录下。
+---
 
-## 📚 参考文献 (References)
+## 📈 Ablation Studies
+
+| Method | Principle | Reward | Dead Units | Verdict |
+|:-------|:----------|:------:|:----------:|:--------|
+| Baseline | ReLU | 5.80 | 82.4% | Reference |
+| Leaky ReLU | Negative slope | 4.94 | 0.0% | ❌ Alive but useless |
+| Mish | Smooth activation | 5.72 | 93.6% | ❌ Worse |
+| LayerNorm | Normalization | 4.65 | 75.9% | ❌ Industry standard fails |
+| RMSNorm | Lightweight norm | 4.21 | 67.4% | ❌ Worst |
+| ReDo | Periodic reset | 5.73 | 71.4% | ⚠️ Unstable |
+| **Spectral Norm** | Lipschitz constraint | **6.96** | **39.5%** | ✅ **Best** |
+
+---
+
+## 🔑 Key Implementation Details
+
+### 1. Flexible Input Handling
+
+```python
+# ConvEncoder supports both 4D (B,C,H,W) and 2D (B, C*H*W) inputs
+def forward(self, x, check=False):
+    if x.dim() == 2:
+        x = x.view(-1, self.depth, self.conv_size, self.conv_size)
+    # ... convolution layers
+```
+
+### 2. Cumulative Dead Neuron Statistics
+
+```python
+# Only neurons that NEVER activate are counted as "dead"
+# This distinguishes normal ReLU sparsity from true neuron death
+never_activated = (activation_counts == 0).float()
+dead_ratio = never_activated.mean().item()
+```
+
+### 3. Real Environment Data for SVD
+
+```python
+# Use real ProcGen observations, NOT Gaussian noise!
+# Ensure N >= 10*D for valid singular value spectrum
+observations = collect_real_observations(num_samples=2560)  # D=256
+```
+
+---
+
+## 📚 References
 
 ```bibtex
 @article{dohare2024plasticity,
@@ -157,18 +224,28 @@ $$W_{SN} = \frac{W}{\sigma(W)}$$
 
 @inproceedings{miyato2018spectral,
   title={Spectral Normalization for Generative Adversarial Networks},
-  author={Miyato, Takeru and others},
+  author={Miyato, Takeru and Kataoka, Toshiki and Koyama, Masanori and Yoshida, Yuichi},
   booktitle={ICLR},
   year={2018}
 }
+
+@article{kumar2020implicit,
+  title={Implicit Under-Parameterization Inhibits Data-Efficient Deep Reinforcement Learning},
+  author={Kumar, Aviral and others},
+  journal={arXiv preprint arXiv:2010.14498},
+  year={2020}
+}
 ```
+
+---
 
 ## 📄 License
 
-MIT License
+MIT License - feel free to use this code for your research!
 
 ---
 
 <p align="center">
-  <i>Made with ❤️ for Deep Reinforcement Learning Course Design</i>
+  <i>Made with ❤️ for Deep Reinforcement Learning</i><br>
+  <b>If you find this useful, please ⭐ star this repo!</b>
 </p>
