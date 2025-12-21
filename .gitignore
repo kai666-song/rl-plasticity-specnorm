@@ -136,6 +136,7 @@ dmypy.json
 *.pkl
 
 # TensorBoard logs
+logs/
 **/logs/
 events.out.tfevents.*
 

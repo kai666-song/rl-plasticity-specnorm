@@ -50,6 +50,7 @@ condition_name_map = {
     "redo-reset-100": "ReDo Reset (100)",
     "redo-reset-1000": "ReDo Reset (1000)",
     "redo_reset": "ReDo Reset",
+    "redo": "ReDo Reset",
 }
 
 

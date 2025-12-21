@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from envs.mdps import ProcGenEnv, FrameStackWrapper, GroupEnv
-from envs.gridworld import GridWorld
-from envs.bandits import ImageEnv
+#from envs.gridworld import GridWorld
+#from envs.bandits import ImageEnv
 from shared.trainer import BaseTrainer
 from algos.ppo.trainer import PPOTrainer
 from algos.ppo.model import PPOModel
@@ -48,26 +48,27 @@ def make_env(env_params, seed=0, train=True):
     env_name = env_params["name"]
     shift_type = env_params["shift_type"]
     obs_type = env_params["obs_type"]
-    task = env_params.get(
-        "task"
-    )  # Using get to avoid KeyError in case "task" is not present
+    task = env_params.get("task")
 
     # Mapping of env_name to dataset name for ImageEnv.
     image_env_datasets = ["mnist", "fashion", "svhn", "cifar10"]
 
     # If the env_name matches an ImageEnv dataset
     if env_name in image_env_datasets:
+        from envs.bandits import ImageEnv  # 延迟导入
         env = ImageEnv(
             shift_type=shift_type, dataset=image_env_datasets[env_name], train=train
         )
     # Other specific environment mappings
     elif env_name == "gridworld":
+        from envs.gridworld import GridWorld  # 延迟导入
         env = GridWorld(
             task=task, shift_type=shift_type, train=train, seed=seed, obs_type=obs_type
         )
     elif env_name == "procgen":
         env = ProcGenEnv(shift_type=shift_type, task=task, train=train, seed=seed)
     elif env_name == "gridworld-stack":
+        from envs.gridworld import GridWorld  # 延迟导入
         env = GridWorld(
             shift_type=shift_type, train=train, seed=seed, obs_type=obs_type
         )
@@ -78,6 +79,7 @@ def make_env(env_params, seed=0, train=True):
     else:
         raise ValueError("Unknown environment")
     return env
+
 
 
 def set_seeds(seed):
@@ -150,6 +152,18 @@ def gen_trainer(hyperparams, seed=0, descriptor="", base_path=None):
 
 
 def compute_stats(stat_list):
+    """
+    计算统计量的均值和标准误差
+    
+    处理可能长度不一致的列表（续训时可能出现）
+    """
+    # 如果是列表的列表，需要对齐长度
+    if isinstance(stat_list, list) and len(stat_list) > 0:
+        if isinstance(stat_list[0], (list, np.ndarray)):
+            # 找到最短的长度，截断到相同长度
+            min_len = min(len(s) for s in stat_list)
+            stat_list = [s[:min_len] for s in stat_list]
+    
     stat_list = np.array(stat_list)
     mean = np.mean(stat_list, axis=0)
     ste = np.std(stat_list, axis=0) / np.sqrt(stat_list.shape[0])
@@ -200,8 +214,6 @@ def run_experiments(hyperparams, resume=False):
     os.makedirs(checkpoint_folder, exist_ok=True)
     
     stat_list = BaseTrainer.stat_list()
-    # raw_result 存储原始列表数据用于累积，result_dict 存储处理后的数据用于保存和绘图
-    raw_result = {stat: {} for stat in stat_list}
     result_dict = {stat: {} for stat in stat_list}
 
     for condition_name, condition_params in experiment["conditions"].items():
@@ -223,28 +235,32 @@ def run_experiments(hyperparams, resume=False):
             checkpoint_path = f"{checkpoint_folder}/{session_descriptor}.pt"
             start_epoch = 0
             if resume:
-                start_epoch, loaded_raw = load_checkpoint(trainer, checkpoint_path)
-                if loaded_raw is not None:
-                    raw_result = loaded_raw
+                start_epoch, _ = load_checkpoint(trainer, checkpoint_path)
 
             for epoch in range(start_epoch, trainer.num_epochs):
                 stats = trainer.train(epoch)
                 if (
                     epoch % experiment["save_freq"] == 0 and epoch > 0
                 ) or epoch == trainer.num_epochs - 1:
+                    # 直接使用 trainer.result_dict（已包含完整历史）
                     for stat in stat_list:
-                        if condition_name not in raw_result[stat]:
-                            raw_result[stat][condition_name] = []
-                        raw_result[stat][condition_name].append(stats[stat])
-
-                    for stat in stat_list:
-                        mean, ste = compute_stats(raw_result[stat][condition_name])
-                        result_dict[stat][condition_name] = (mean, ste, mean)
+                        data = trainer.result_dict[stat]
+                        # 转换为 numpy array
+                        if isinstance(data, list):
+                            # 处理可能包含 tensor 的列表
+                            processed = []
+                            for v in data:
+                                if hasattr(v, 'item'):
+                                    processed.append(v.item())
+                                else:
+                                    processed.append(v)
+                            data = np.array(processed)
+                        result_dict[stat][condition_name] = (data, np.zeros_like(data), data)
 
                     save_stats(result_dict, hyperparams, data_folder)
                     
-                    # 保存检查点（保存raw_result以便续训）
-                    save_checkpoint(trainer, epoch, raw_result, checkpoint_path)
+                    # 保存检查点（简化，不保存 raw_result）
+                    save_checkpoint(trainer, epoch, {}, checkpoint_path)
 
                     for title, sub_dict in result_dict.items():
                         plot_result(sub_dict, title, hyperparams, base_path, epoch + 1)

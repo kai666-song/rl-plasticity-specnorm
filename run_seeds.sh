@@ -5,11 +5,12 @@
 # 用于运行多个随机种子的实验，生成统计显著的结果
 #
 # Usage:
-#   ./run_seeds.sh baseline 5      # 运行 baseline 方法，5个种子
-#   ./run_seeds.sh specnorm 5      # 运行 specnorm 方法，5个种子
-#   ./run_seeds.sh redo 5          # 运行 redo 方法，5个种子
-#   ./run_seeds.sh layernorm 5     # 运行 layernorm 方法，5个种子
-#   ./run_seeds.sh all 5           # 运行所有方法，每个5个种子
+#   ./run_seeds.sh baseline 5           # 运行 baseline 方法，5个种子
+#   ./run_seeds.sh specnorm 5           # 运行 specnorm 方法，5个种子
+#   ./run_seeds.sh redo 5               # 运行 redo 方法，5个种子
+#   ./run_seeds.sh layernorm 5          # 运行 layernorm 方法，5个种子
+#   ./run_seeds.sh all 5                # 运行所有方法，每个5个种子
+#   ./run_seeds.sh baseline 5 --resume  # 断点续训模式
 #
 # Output:
 #   results/multiseed/{method}/seed_{n}/checkpoints/{method}_0.pt
@@ -19,8 +20,15 @@ set -e  # 遇到错误立即退出
 
 METHOD=${1:-baseline}
 NUM_SEEDS=${2:-5}
+RESUME_FLAG=${3:-""}
 CONFIG="hyperparams_multiseed.yaml"
 OUTPUT_BASE="results/multiseed"
+
+# 检查是否启用断点续训
+RESUME_ARG=""
+if [ "$RESUME_FLAG" = "--resume" ] || [ "$RESUME_FLAG" = "-r" ]; then
+    RESUME_ARG="-r"
+fi
 
 echo "=============================================="
 echo "Multi-Seed Training Script"
@@ -29,6 +37,9 @@ echo "Method: $METHOD"
 echo "Number of seeds: $NUM_SEEDS"
 echo "Config: $CONFIG"
 echo "Output: $OUTPUT_BASE"
+if [ -n "$RESUME_ARG" ]; then
+    echo "Resume: ENABLED"
+fi
 echo "=============================================="
 
 run_method() {
@@ -50,7 +61,8 @@ run_method() {
             -c "$method" \
             -s "$SEED" \
             -n "${method}_seed${SEED}" \
-            -o "$OUTPUT_DIR"
+            -o "$OUTPUT_DIR" \
+            $RESUME_ARG
         
         echo "✓ Completed $method seed $SEED"
     done

@@ -167,7 +167,20 @@ class LnReLU(nn.Module):
 
 
 class GnReLU(nn.Module):
-    # Simple groupnorm followed by RELU
+    """
+    GroupNorm followed by ReLU
+    
+    实现细节说明：
+    - 当 groups=1 时，GroupNorm(1, C) 在数学上等价于 LayerNorm
+    - 这是因为 GroupNorm(1, C) 对每个样本的所有通道做归一化
+    - 对于卷积层，我们使用 GroupNorm(1) 替代 LayerNorm，因为：
+      1. 标准 nn.LayerNorm 期望输入形状为 (B, D)，无法处理 4D 卷积输出 (B, C, H, W)
+      2. GroupNorm(1, C) 能正确处理空间维度，同时实现相同的归一化效果
+    
+    Reference:
+        Wu & He, "Group Normalization", ECCV 2018
+        - GroupNorm(1, C) 也被称为 "Layer Normalization for CNNs"
+    """
     def __init__(self, h_size, groups=1):
         super().__init__()
         self.norm = nn.GroupNorm(groups, h_size)
@@ -231,9 +244,10 @@ def compute_effective_rank(features: torch.Tensor, min_ratio: float = 1.0) -> to
     # 中心化特征
     features = features - features.mean(dim=0, keepdim=True)
     
-    # 计算奇异值
+    # 计算奇异值（使用 torch.linalg.svd 替代已废弃的 torch.svd）
+    # torch.linalg.svd 返回 (U, S, Vh)，与旧 API 的 (U, S, V) 略有不同
     try:
-        _, S, _ = torch.svd(features, compute_uv=False)
+        S = torch.linalg.svdvals(features)  # 仅需奇异值，更高效
     except:
         return torch.tensor(0.0)
     
@@ -259,10 +273,14 @@ def compute_singular_values(features):
     
     Returns:
         torch.Tensor: 奇异值，按降序排列
+    
+    Note:
+        使用 torch.linalg.svdvals 替代已废弃的 torch.svd，
+        该函数仅计算奇异值，比完整 SVD 更高效。
     """
     features = features - features.mean(dim=0, keepdim=True)
     try:
-        _, S, _ = torch.svd(features, compute_uv=False)
+        S = torch.linalg.svdvals(features)  # 返回降序排列的奇异值
         return S
     except:
         return torch.zeros(min(features.shape))
@@ -430,7 +448,7 @@ class ConvEncoder(nn.Module):
         else:
             raise NotImplementedError
 
-    def forward(self, x: torch.Tensor, check: bool = False):
+    def forward(self, x: torch.Tensor, return_stats: bool = False, compute_rank: bool = False):
         """
         前向传播，支持灵活的输入格式
         
@@ -438,11 +456,13 @@ class ConvEncoder(nn.Module):
             x: 输入张量，支持两种格式：
                - 4D: (B, C, H, W) - 直接进行卷积
                - 2D: (B, C*H*W) - 验证后 reshape 为 4D
-            check: 是否返回诊断信息（dead_units, eff_rank）
+            return_stats: 是否返回诊断信息（dead_units, eff_rank）
+            compute_rank: 是否计算 eff_rank（SVD 开销大，仅在需要时启用）
         
         Returns:
-            如果 check=False: 特征向量 (B, h_size)
-            如果 check=True: (特征向量, dead_units, eff_rank)
+            如果 return_stats=False: 特征向量 (B, h_size)
+            如果 return_stats=True: (特征向量, dead_units, eff_rank)
+                - 当 compute_rank=False 时，eff_rank 返回 -1.0 占位符
         
         Raises:
             ValueError: 如果输入维度不符合预期
@@ -479,9 +499,10 @@ class ConvEncoder(nn.Module):
         
         x = self.encoder(x)
 
-        if check:
+        if return_stats:
             dead_units = self.calc_dead_units(x)
-            eff_rank = compute_effective_rank(x)
+            # 仅在 compute_rank=True 时执行 SVD 计算
+            eff_rank = compute_effective_rank(x) if compute_rank else torch.tensor(-1.0)
             return x, dead_units, eff_rank
         else:
             return x
@@ -585,25 +606,29 @@ class LinearEncoder(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        check: bool = False
+        return_stats: bool = False,
+        compute_rank: bool = False
     ) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         前向传播
         
         Args:
             x: 输入张量 (B, obs_size)
-            check: 是否返回诊断信息
+            return_stats: 是否返回诊断信息
+            compute_rank: 是否计算 eff_rank（SVD 开销大，仅在需要时启用）
         
         Returns:
-            如果 check=False: 特征向量 (B, h_size)
-            如果 check=True: (特征向量, dead_units, eff_rank)
+            如果 return_stats=False: 特征向量 (B, h_size)
+            如果 return_stats=True: (特征向量, dead_units, eff_rank)
+                - 当 compute_rank=False 时，eff_rank 返回 -1.0 占位符
         """
         x = self.enc_a(x)
         x = self.enc_b(x)
 
-        if check:
+        if return_stats:
             dead_units = self.calc_dead_units(x)
-            eff_rank = compute_effective_rank(x)
+            # 仅在 compute_rank=True 时执行 SVD 计算
+            eff_rank = compute_effective_rank(x) if compute_rank else torch.tensor(-1.0)
             return x, dead_units, eff_rank
         else:
             return x
@@ -649,8 +674,34 @@ def reinitialize_weights(module, reset_mask, next_module):
     module.weight.data[reset_mask] = new_weights[reset_mask].to(module.weight.device)
 
     # 将重置神经元的输出权重置零，防止重置立即影响网络输出
-    if type(module) == type(next_module):
-        next_module.weight.data[:, reset_mask] = 0.0
+    # 类型检查：确保 next_module 是 Linear 或 Conv2d 层
+    if next_module is not None and isinstance(next_module, (nn.Linear, nn.Conv2d)):
+        if isinstance(module, nn.Linear) and isinstance(next_module, nn.Linear):
+            next_module.weight.data[:, reset_mask] = 0.0
+        elif isinstance(module, nn.Conv2d) and isinstance(next_module, nn.Conv2d):
+            next_module.weight.data[:, reset_mask] = 0.0
+
+
+def _find_next_linear_or_conv(modules: list, start_idx: int) -> tuple:
+    """
+    从 modules 列表中查找下一个 Linear 或 Conv2d 层
+    
+    Args:
+        modules: (name, module) 元组列表
+        start_idx: 开始搜索的索引（不包含）
+    
+    Returns:
+        (name, module) 元组，如果未找到则返回 (None, None)
+    
+    Note:
+        这个函数用于增强 ReDo 的稳健性，避免因网络中存在
+        Dropout、BatchNorm、View 等层而导致 i+1 取到错误模块
+    """
+    for j in range(start_idx + 1, len(modules)):
+        _, mod = modules[j]
+        if isinstance(mod, (nn.Linear, nn.Conv2d)):
+            return modules[j]
+    return (None, None)
 
 
 def redo_reset(model, input, temp):
@@ -704,11 +755,8 @@ def redo_reset(model, input, temp):
                 s_scores = s_scores_dict[base_name]
                 reset_mask = s_scores <= temp
 
-                # Check if there is a next module in the list and get it
-                next_module = modules[i + 1][1] if i + 1 < len(modules) else None
-                # Assuming reinitialize_weights is modified to handle the next_module
-                # You would need to adjust reinitialize_weights to apply the necessary changes
-                # to both the current and next modules based on reset_mask.
+                # 使用稳健的查找逻辑，跳过 Dropout/BatchNorm/View 等非参数层
+                _, next_module = _find_next_linear_or_conv(modules, i)
                 reinitialize_weights(module, reset_mask, next_module)
 
 

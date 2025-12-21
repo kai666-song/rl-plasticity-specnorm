@@ -91,18 +91,27 @@ class PPOModel(torch.nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        check: bool = False
+        return_stats: bool = False,
+        compute_rank: bool = False
     ) -> Union[tuple[torch.Tensor, torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         前向传播
         
         Args:
             x: 输入观测，支持 4D (B, C, H, W) 或 2D (B, obs_size)
-            check: 是否返回诊断信息（dead_units, eff_rank）
+            return_stats: 是否返回诊断信息（dead_units, eff_rank）
+            compute_rank: 是否计算 eff_rank（SVD 计算开销大，仅在需要时启用）
+                          当 return_stats=True 但 compute_rank=False 时，
+                          eff_rank 返回 -1.0 占位符
         
         Returns:
-            如果 check=False: (logits, value)
-            如果 check=True: (logits, value, dead_units, eff_rank)
+            如果 return_stats=False: (logits, value)
+            如果 return_stats=True: (logits, value, dead_units, eff_rank)
+        
+        Note:
+            - 训练时建议 return_stats=True, compute_rank=False（仅获取 dead_units）
+            - 评估/日志时可设 return_stats=True, compute_rank=True（完整诊断）
+            - SVD 计算在 batch_size < h_size 时结果无意义，真实秩分析请用 analyze_features.py
         """
         # 智能维度处理：保持 4D 输入不变，其他情况 reshape 为 2D
         if x.dim() != 4:
@@ -114,12 +123,12 @@ class PPOModel(torch.nn.Module):
             logits = self.policy(x_policy)
             value = self.value(x_value)
         else:
-            x = self.encoder(x, check=check)
-            if check:
+            x = self.encoder(x, return_stats=return_stats, compute_rank=compute_rank)
+            if return_stats:
                 x, dead_units, eff_rank = x
             logits = self.policy(x)
             value = self.value(x)
-        if check:
+        if return_stats:
             return logits, value.view(-1), dead_units, eff_rank
         return logits, value.view(-1)
 

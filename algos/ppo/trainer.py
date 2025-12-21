@@ -160,10 +160,13 @@ class PPOTrainer(BaseTrainer):
         old_log_probs = F.log_softmax(buffer_logits, dim=-1).detach()
         old_log_probs = old_log_probs.gather(1, buffer_actions.unsqueeze(1)).squeeze(1)
 
-        # 性能优化：仅在 logging interval (每 10 个 epoch) 计算诊断信息
-        # SVD 计算 (eff_rank) 非常消耗资源，且 batch_size (64) < h_size (256) 时结果无意义
+        # 性能优化：
+        # - dead_units: 每个 epoch 都计算（开销小，用于监控训练健康度）
+        # - eff_rank: 仅在 logging interval (每 10 个 epoch) 计算（SVD 开销大）
+        # 
+        # 【重要】batch_size (64) < h_size (256) 时，SVD 计算的秩会被截断，结果无物理意义
         # 真实的秩分析应在 analyze_features.py 中用大批量 (N >> D) 离线计算
-        should_compute_diagnostics = (epoch % 10 == 0)
+        should_compute_rank = (epoch % 10 == 0)
 
         total_pg_loss = []
         total_v_loss = []
@@ -186,18 +189,12 @@ class PPOTrainer(BaseTrainer):
                 batch_adv = (batch_adv - batch_adv.mean()) / (batch_adv.std() + EPSILON)
                 batch_old_log_probs = old_log_probs[batch]
                 
-                # 仅在 logging interval 计算诊断信息 (dead_units, eff_rank)
-                # 这大幅减少了训练时的 SVD 计算开销
-                if should_compute_diagnostics:
-                    batch_logits, batch_values, batch_dead, batch_eff_rank = self.model(
-                        batch_obs.to(self.device), check=True
-                    )
-                else:
-                    batch_logits, batch_values = self.model(
-                        batch_obs.to(self.device), check=False
-                    )
-                    batch_dead = torch.tensor(0.0)
-                    batch_eff_rank = torch.tensor(-1.0)  # -1.0 表示未计算
+                # 始终获取 dead_units（开销小），仅在 logging interval 计算 eff_rank（SVD 开销大）
+                batch_logits, batch_values, batch_dead, batch_eff_rank = self.model(
+                    batch_obs.to(self.device), 
+                    return_stats=True, 
+                    compute_rank=should_compute_rank
+                )
                 # batch_eff_rank 在训练时仅作参考，真实秩分析见 analyze_features.py
                 batch_new_log_probs = F.log_softmax(batch_logits, dim=-1)
                 batch_new_log_probs = batch_new_log_probs.gather(

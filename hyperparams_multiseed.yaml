@@ -49,7 +49,7 @@ experiment:
       model.layernorm: true
   
   name: null
-  num_sessions: 5  # 5个随机种子 (Seed 0-4)，确保统计显著性
+  num_sessions: 1  # 每个种子只跑一次，多种子由 run_seeds.sh 控制
 
 environment:
   name: procgen

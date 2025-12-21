@@ -114,27 +114,53 @@ EXPERIMENTS_FULL = {
 SHIFT_POINTS = [1000, 2000]
 
 # 多种子实验配置
+# 路径模式: results/multiseed/{method}/seed_{seed}/results/{method}_seed{seed}/checkpoints/{method}_0.pt
+# 注意：由于之前 num_sessions 配置问题，checkpoint 文件名可能是 {method}_0.pt 而非 {method}_seed{seed}_0.pt
 MULTISEED_EXPERIMENTS = {
     'Baseline (ReLU)': {
-        'checkpoint_pattern': 'results/multiseed/baseline/seed_{seed}/checkpoints/baseline_seed{seed}_0.pt',
+        'checkpoint_pattern': 'results/multiseed/baseline/seed_{seed}/results/baseline_seed{seed}/checkpoints/baseline_0.pt',
+        # 备选路径模式（自动扫描时使用）
+        'alt_patterns': [
+            'results/multiseed/baseline/seed_{seed}/checkpoints/baseline_seed{seed}_0.pt',
+            'results/multiseed/baseline/seed_{seed}/checkpoints/baseline_0.pt',
+        ],
         'color': '#7F8C8D',
         'linestyle': '-',
         'linewidth': 2.0,
         'zorder': 1,
     },
     'ReDo Reset': {
-        'checkpoint_pattern': 'results/multiseed/redo/seed_{seed}/checkpoints/redo_seed{seed}_0.pt',
+        'checkpoint_pattern': 'results/multiseed/redo/seed_{seed}/results/redo_seed{seed}/checkpoints/redo_0.pt',
+        'alt_patterns': [
+            'results/multiseed/redo/seed_{seed}/checkpoints/redo_seed{seed}_0.pt',
+            'results/multiseed/redo/seed_{seed}/checkpoints/redo_0.pt',
+        ],
         'color': '#27AE60',
         'linestyle': '-.',
         'linewidth': 2.0,
         'zorder': 3,
     },
     'Spectral Norm (Ours)': {
-        'checkpoint_pattern': 'results/multiseed/specnorm/seed_{seed}/checkpoints/specnorm_seed{seed}_0.pt',
+        'checkpoint_pattern': 'results/multiseed/specnorm/seed_{seed}/results/specnorm_seed{seed}/checkpoints/specnorm_0.pt',
+        'alt_patterns': [
+            'results/multiseed/specnorm/seed_{seed}/checkpoints/specnorm_seed{seed}_0.pt',
+            'results/multiseed/specnorm/seed_{seed}/checkpoints/specnorm_0.pt',
+        ],
         'color': '#E74C3C',
         'linestyle': '-',
         'linewidth': 2.5,
         'zorder': 10,
+    },
+    'LayerNorm': {
+        'checkpoint_pattern': 'results/multiseed/layernorm/seed_{seed}/results/layernorm_seed{seed}/checkpoints/layernorm_0.pt',
+        'alt_patterns': [
+            'results/multiseed/layernorm/seed_{seed}/checkpoints/layernorm_seed{seed}_0.pt',
+            'results/multiseed/layernorm/seed_{seed}/checkpoints/layernorm_0.pt',
+        ],
+        'color': '#3498DB',
+        'linestyle': '--',
+        'linewidth': 2.0,
+        'zorder': 2,
     },
 }
 
@@ -183,15 +209,17 @@ def load_all_experiments(experiments=None):
 def load_multi_seed_data(
     method_name: str,
     checkpoint_pattern: str,
-    num_seeds: int = 5
+    num_seeds: int = 5,
+    alt_patterns: list = None
 ) -> dict:
     """
-    加载多个种子的实验数据
+    加载多个种子的实验数据（支持多种路径模式自动扫描）
     
     Args:
         method_name: 方法名称（用于日志输出）
-        checkpoint_pattern: checkpoint 路径模式，使用 {seed} 占位符
+        checkpoint_pattern: 主 checkpoint 路径模式，使用 {seed} 占位符
         num_seeds: 种子数量
+        alt_patterns: 备选路径模式列表，当主模式找不到文件时尝试
     
     Returns:
         包含每个 metric 的 'mean' 和 'std' 的字典，如果没有数据则返回 None
@@ -200,22 +228,69 @@ def load_multi_seed_data(
         >>> data = load_multi_seed_data(
         ...     'Baseline',
         ...     'results/multiseed/baseline/seed_{seed}/checkpoints/baseline_0.pt',
-        ...     num_seeds=5
+        ...     num_seeds=5,
+        ...     alt_patterns=['results/baseline/checkpoints/baseline_{seed}.pt']
         ... )
         >>> print(data['test_r']['mean'].shape)  # (num_epochs,)
     """
     all_seed_data = []
     loaded_seeds = []
     
+    # 收集所有可能的路径模式
+    patterns_to_try = [checkpoint_pattern]
+    if alt_patterns:
+        patterns_to_try.extend(alt_patterns)
+    
     for seed in range(num_seeds):
-        path = checkpoint_pattern.format(seed=seed)
-        if Path(path).exists():
-            try:
-                data = load_checkpoint_data(path)
-                all_seed_data.append(data)
-                loaded_seeds.append(seed)
-            except Exception as e:
-                print(f"  ⚠ Failed to load seed {seed}: {e}")
+        loaded = False
+        for pattern in patterns_to_try:
+            path = pattern.format(seed=seed)
+            if Path(path).exists():
+                try:
+                    data = load_checkpoint_data(path)
+                    all_seed_data.append(data)
+                    loaded_seeds.append(seed)
+                    loaded = True
+                    break  # 找到一个就停止
+                except Exception as e:
+                    print(f"  ⚠ Failed to load seed {seed} from {path}: {e}")
+        
+        if not loaded:
+            # 尝试自动扫描目录中的文件（包括子目录）
+            method_lower = method_name.lower().replace(' ', '_').replace('(', '').replace(')', '')
+            # 提取方法名的关键词（支持多种命名方式）
+            method_keyword_map = {
+                'baseline': 'baseline',
+                'specnorm': 'specnorm',
+                'spectral': 'specnorm',  # "Spectral Norm" -> specnorm
+                'redo': 'redo',
+                'layernorm': 'layernorm',
+            }
+            method_key = None
+            for kw, folder in method_keyword_map.items():
+                if kw in method_lower:
+                    method_key = folder
+                    break
+            
+            if method_key:
+                # 扫描 results/multiseed/{method}/seed_{seed} 目录
+                seed_dir = Path(f'results/multiseed/{method_key}/seed_{seed}')
+                if seed_dir.exists():
+                    # 递归查找所有 .pt 文件
+                    for pt_file in seed_dir.rglob('*.pt'):
+                        try:
+                            ckpt = torch.load(pt_file, map_location='cpu', weights_only=False)
+                            epoch = ckpt.get('epoch', -1)
+                            # 只加载完成的实验 (epoch >= 2999)
+                            if epoch >= 2999:
+                                data = load_checkpoint_data(str(pt_file))
+                                all_seed_data.append(data)
+                                loaded_seeds.append(seed)
+                                loaded = True
+                                print(f"    Found: {pt_file} (epoch {epoch})")
+                                break
+                        except Exception as e:
+                            pass
     
     if not all_seed_data:
         print(f"  ✗ No data found for {method_name}")
@@ -242,7 +317,7 @@ def load_multi_seed_data(
 
 def load_all_multiseed_experiments(experiments=None, num_seeds: int = 5):
     """
-    加载所有多种子实验数据
+    加载所有多种子实验数据（支持自动扫描多种路径模式）
     
     Args:
         experiments: 实验配置字典，默认使用 MULTISEED_EXPERIMENTS
@@ -261,7 +336,8 @@ def load_all_multiseed_experiments(experiments=None, num_seeds: int = 5):
         data = load_multi_seed_data(
             name,
             config['checkpoint_pattern'],
-            num_seeds
+            num_seeds,
+            alt_patterns=config.get('alt_patterns', [])
         )
         if data is not None:
             all_data[name] = {'data': data, 'config': config}
