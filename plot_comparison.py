@@ -631,14 +631,8 @@ def main():
             output_dir / 'dead_units_comparison.png'
         )
         
-        # 检查是否有 eff_rank 数据
-        has_eff_rank = any('eff_rank' in exp['data'] for exp in all_data.values())
-        if has_eff_rank:
-            plot_metric_comparison(
-                all_data, 'eff_rank', 'Effective Rank',
-                'Effective Rank Comparison (All Methods)',
-                output_dir / 'effective_rank_comparison.png'
-            )
+        # Note: eff_rank comparison removed - only LayerNorm records this metric
+        # If needed, re-run experiments with eff_rank logging enabled for all methods
         
         print("\n[4/6] Generating summary comparison plot...")
         plot_summary_comparison(all_data, output_dir / 'summary_comparison.png')
